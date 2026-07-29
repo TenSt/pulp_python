@@ -4,6 +4,9 @@ Python repositories offer two mechanisms for controlling which packages they acc
 **blocklists** to prevent specific packages from being added, and
 **package substitution control** to prevent silent replacement of existing packages.
 
+By default, when either policy rejects a package, the entire repository version operation fails.
+Set `error_on_reject` to `False` to instead skip rejected packages and continue adding the rest.
+
 ## Setup
 
 If you do not already have a repository, create one:
@@ -178,3 +181,34 @@ pulp python repository update --repository "foo" --allow-package-substitution
 ```
 
 Once re-enabled, packages with duplicate filenames can replace existing content again.
+
+## Partial rejection (`error_on_reject`)
+
+When a package is rejected by the blocklist or by the package substitution policy
+(`allow_package_substitution=False`), the default behavior (`error_on_reject=True`) is to fail
+the entire operation. No packages from the request are added.
+
+Setting `error_on_reject` to `False` changes this: rejected packages are skipped, remaining
+packages are added, and skipped packages are recorded in a task progress report (including
+filenames and package pks).
+
+### Disable failing on rejected packages
+
+```bash
+http PATCH http://localhost:5001/pulp/api/v3/repositories/python/python/<repo_pk>/ \
+  error_on_reject:=false -a admin:password
+```
+
+You can also set this when creating a repository:
+
+```bash
+http POST http://localhost:5001/pulp/api/v3/repositories/python/python/ \
+  name=foo3 error_on_reject:=false allow_package_substitution:=false -a admin:password
+```
+
+### Re-enable failing on rejected packages
+
+```bash
+http PATCH http://localhost:5001/pulp/api/v3/repositories/python/python/<repo_pk>/ \
+  error_on_reject:=true -a admin:password
+```

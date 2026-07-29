@@ -148,19 +148,21 @@ class PythonRepositoryViewSet(
         """
         Queues a task that creates a new RepositoryVersion by adding and removing content units.
 
-        If allow_package_substitution is False and the request is **only** adding packages, then a
-        package substitution check is performed to provide a quicker error response. Otherwise, the
-        check is delegated to the task.
+        If allow_package_substitution is False, error_on_reject is True, and the request is
+        **only** adding packages, then a package substitution check is performed to provide a
+        quicker error response. Otherwise, the check is delegated to the task.
 
-        Also performs an early blocklist check on added packages.
+        Also performs an early blocklist check on added packages when error_on_reject is True.
+        When error_on_reject is False, rejected packages are skipped during task finalization.
         """
         repository = self.get_object()
         add_content_units = request.data.get("add_content_units", [])
         content_ids = [extract_pk(x) for x in add_content_units]
 
-        self._early_blocklist_check(repository, content_ids)
+        if repository.error_on_reject:
+            self._early_blocklist_check(repository, content_ids)
 
-        if not repository.allow_package_substitution:
+        if not repository.allow_package_substitution and repository.error_on_reject:
             remove_content_units = request.data.get("remove_content_units", [])
             if remove_content_units or "base_version" in request.data:
                 return super().modify(request, pk)
@@ -189,7 +191,13 @@ class PythonRepositoryViewSet(
         packages = python_models.PythonPackageContent.objects.filter(pk__in=content_ids).only(
             "filename", "name_normalized", "version"
         )
-        repository.check_blocklist_for_packages(packages)
+        blocked = repository.find_blocklisted_packages(packages)
+        if blocked:
+            raise ValidationError(
+                "Blocklisted packages cannot be added to this repository: {}".format(
+                    ", ".join(pkg.filename for pkg in blocked)
+                )
+            )
 
     @extend_schema(
         summary="Repair metadata",

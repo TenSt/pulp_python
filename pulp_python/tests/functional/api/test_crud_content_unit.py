@@ -304,3 +304,59 @@ def test_package_substitution_allowed_by_default(
     )
     assert content_list.count == 1
     assert content_list.results[0].sha256 == content2.sha256
+
+
+def test_error_on_reject_false_skips_substitution(
+    monitor_task,
+    python_bindings,
+    python_repo_factory,
+):
+    """
+    When error_on_reject=False and allow_package_substitution=False, conflicting packages
+    in a batch modify are skipped while non-conflicting packages are still added.
+    """
+    repo = python_repo_factory(allow_package_substitution=False, error_on_reject=False)
+    assert repo.error_on_reject is False
+
+    content_body = {"relative_path": PYTHON_EGG_FILENAME, "file_url": PYTHON_EGG_URL}
+    response = python_bindings.ContentPackagesApi.create(repository=repo.pulp_href, **content_body)
+    task = monitor_task(response.task)
+    original = python_bindings.ContentPackagesApi.read(task.created_resources[-1])
+
+    # Conflicting package: same filename, different checksum
+    conflict_filename = "pip-26.0.1.tar.gz"
+    conflict_url = get_package_url("pip", conflict_filename)
+    response = python_bindings.ContentPackagesApi.create(
+        relative_path=PYTHON_EGG_FILENAME, file_url=conflict_url
+    )
+    conflict = python_bindings.ContentPackagesApi.read(
+        monitor_task(response.task).created_resources[0]
+    )
+
+    # Non-conflicting package
+    response = python_bindings.ContentPackagesApi.create(
+        relative_path=PYTHON_WHEEL_FILENAME, file_url=PYTHON_WHEEL_URL
+    )
+    wheel = python_bindings.ContentPackagesApi.read(
+        monitor_task(response.task).created_resources[0]
+    )
+
+    body = {"add_content_units": [conflict.pulp_href, wheel.pulp_href]}
+    task = monitor_task(python_bindings.RepositoriesPythonApi.modify(repo.pulp_href, body).task)
+
+    reports = {report.code: report for report in task.progress_reports}
+    assert "python.reject.substitution" in reports
+    report = reports["python.reject.substitution"]
+    assert report.done == 1
+    assert PYTHON_EGG_FILENAME in report.suffix
+    assert conflict.prn.split(":")[-1] in report.suffix
+
+    repo = python_bindings.RepositoriesPythonApi.read(repo.pulp_href)
+    content_list = python_bindings.ContentPackagesApi.list(
+        repository_version=repo.latest_version_href
+    )
+    hrefs = {c.pulp_href for c in content_list.results}
+    assert original.pulp_href in hrefs
+    assert wheel.pulp_href in hrefs
+    assert conflict.pulp_href not in hrefs
+    assert content_list.count == 2
