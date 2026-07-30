@@ -615,6 +615,29 @@ class PackageProvenanceViewSet(core_viewsets.NoArtifactContentUploadViewSet):
     }
 
 
+class PackageYankViewSet(core_viewsets.ReadOnlyContentViewSet):
+    """
+    Read-only viewset for PackageYank content units (PEP 592).
+    PackageYank markers indicate that a package version has been yanked in a repository.
+    Use the /yank/ and /unyank/ PyPI endpoints to create or remove these markers.
+    """
+
+    endpoint_name = "yanks"
+    queryset = python_models.PackageYank.objects.all()
+    serializer_class = python_serializers.PackageYankSerializer
+
+    DEFAULT_ACCESS_POLICY = {
+        "statements": [
+            {
+                "action": ["list", "retrieve"],
+                "principal": "authenticated",
+                "effect": "allow",
+            },
+        ],
+        "queryset_scoping": {"function": "scope_queryset"},
+    }
+
+
 class PythonRemoteViewSet(core_viewsets.RemoteViewSet, core_viewsets.RolesMixin):
     """
     <!-- User-facing documentation, rendered as html-->

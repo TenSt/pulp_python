@@ -136,3 +136,24 @@ class PackageUploadTaskSerializer(serializers.Serializer):
     session = serializers.CharField(allow_null=True)
     task = serializers.CharField()
     task_start_time = serializers.DateTimeField(allow_null=True)
+
+
+class YankSerializer(serializers.Serializer):
+    """
+    A Serializer for yank/unyank requests (PEP 592).
+    """
+
+    name = serializers.CharField(
+        help_text=_("The name of the package to yank or unyank."),
+        required=True,
+    )
+    version = serializers.CharField(
+        help_text=_("The version of the package to yank or unyank."),
+        required=True,
+    )
+    yanked_reason = serializers.CharField(
+        help_text=_("The reason for yanking the package version."),
+        required=False,
+        allow_blank=True,
+        default="",
+    )
