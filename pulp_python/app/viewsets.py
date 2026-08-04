@@ -5,6 +5,7 @@ from django.db import transaction
 from django_filters import CharFilter
 from django_filters.rest_framework import filters as drf_filters
 from drf_spectacular.utils import extend_schema, extend_schema_view
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 from rest_framework import status
 from rest_framework.decorators import action
@@ -466,6 +467,25 @@ class NormalizedNameInFilter(drf_filters.BaseInFilter, NormalizedNameFilter):
     """In-filter that normalizes each input value and queries name_normalized."""
 
 
+class VersionSpecifierFilter(CharFilter):
+    """Filter that matches versions against a PEP 440 specifier string."""
+
+    def filter(self, qs, value):
+        if not value:
+            return qs
+        try:
+            spec = SpecifierSet(value, prereleases=True)
+        except InvalidSpecifier:
+            raise ValidationError(
+                {"version_specifier": f"Invalid PEP 440 version specifier: {value}"}
+            )
+        matching_pks = []
+        for pk, version in qs.values_list("pk", self.field_name):
+            if spec.contains(version):
+                matching_pks.append(pk)
+        return qs.filter(pk__in=matching_pks)
+
+
 class PythonPackageContentFilter(core_viewsets.ContentFilter):
     """
     FilterSet for PythonPackageContent.
@@ -474,6 +494,10 @@ class PythonPackageContentFilter(core_viewsets.ContentFilter):
     name = NormalizedNameFilter(field_name="name_normalized", lookup_expr="exact")
     name__in = NormalizedNameInFilter(field_name="name_normalized", lookup_expr="in")
     name__contains = CharFilter(field_name="name", lookup_expr="contains")
+    version_specifier = VersionSpecifierFilter(
+        field_name="version",
+        help_text="Filter by PEP 440 version specifier (e.g., >=2.4,<3.0 or ~=1.26)",
+    )
 
     class Meta:
         model = python_models.PythonPackageContent
