@@ -29,6 +29,7 @@ from rest_framework.renderers import BrowsableAPIRenderer, JSONRenderer, Templat
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
+from pulpcore.plugin.serializers import AsyncOperationResponseSerializer
 from pulpcore.plugin.tasking import dispatch
 from pulpcore.plugin.util import get_domain, get_url
 from pulpcore.plugin.viewsets import OperationPostponedResponse
@@ -37,6 +38,7 @@ from pulp_python.app import tasks
 from pulp_python.app.cache import PythonApiCache, find_base_path_cached
 from pulp_python.app.models import (
     PackageProvenance,
+    PackageYank,
     PythonDistribution,
     PythonPackageContent,
     PythonPublication,
@@ -46,6 +48,7 @@ from pulp_python.app.pypi.serializers import (
     PackageUploadSerializer,
     PackageUploadTaskSerializer,
     SummarySerializer,
+    YankSerializer,
 )
 from pulp_python.app.utils import (
     PYPI_LAST_SERIAL,
@@ -356,6 +359,8 @@ class SimpleView(PackageUploadMixin, ViewSet):
                 "upload_time": release_package.upload_time,
                 "version": release_package.version,
                 "provenance": release_package.provenance_url,
+                "yanked": release_package.is_yanked,
+                "yanked_reason": release_package.yanked_reason or "",
             }
 
         rfilter = get_remote_package_filter(remote)
@@ -408,6 +413,11 @@ class SimpleView(PackageUploadMixin, ViewSet):
                 "version",
                 "has_provenance",
             )
+            yank_markers = dict(
+                PackageYank.objects.filter(
+                    pk__in=repo_ver.content, name_normalized=normalized
+                ).values_list("version", "yanked_reason")
+            )
             local_releases = {
                 p["filename"]: {
                     **p,
@@ -418,6 +428,8 @@ class SimpleView(PackageUploadMixin, ViewSet):
                         if p["has_provenance"]
                         else None
                     ),
+                    "yanked": p["version"] in yank_markers,
+                    "yanked_reason": yank_markers.get(p["version"], ""),
                 }
                 for p in packages
             }
@@ -493,12 +505,18 @@ class MetadataView(PyPIMixin, ViewSet):
             headers = {PYPI_LAST_SERIAL: str(PYPI_SERIAL_CONSTANT)}
             if settings.DOMAIN_ENABLED:
                 domain = get_domain()
+            yank_markers = dict(
+                PackageYank.objects.filter(
+                    pk__in=repo_ver.content, name_normalized=normalized
+                ).values_list("version", "yanked_reason")
+            )
             json_body = python_content_to_json(
                 path,
                 package_content,
                 version=version,
                 domain=domain,
                 repository_version=repo_ver,
+                yank_markers=yank_markers,
             )
             if json_body:
                 return Response(data=json_body, headers=headers)
@@ -586,3 +604,78 @@ class ProvenanceView(PyPIMixin, ViewSet):
                 if provenance:
                     return Response(data=provenance.provenance)
         return HttpResponseNotFound(f"{package} {version} {filename} provenance does not exist.")
+
+
+class YankView(PyPIMixin, ViewSet):
+    """View for yank/unyank requests (PEP 592)."""
+
+    endpoint_name = "yank"
+    DEFAULT_ACCESS_POLICY = {
+        "statements": [
+            {
+                "action": ["yank", "unyank"],
+                "principal": "authenticated",
+                "effect": "allow",
+                "condition": "index_has_repo_perm:python.modify_pythonrepository",
+            },
+        ],
+    }
+
+    @extend_schema(
+        request=YankSerializer,
+        responses={202: AsyncOperationResponseSerializer},
+        summary="Yank a package version",
+    )
+    def yank(self, request, path):
+        """Yank a package version, marking all its files with data-yanked."""
+        repo = self.distribution.repository
+        if not repo:
+            return HttpResponseBadRequest(reason="Index is not pointing to a repository")
+
+        serializer = YankSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        normalized = canonicalize_name(serializer.validated_data["name"])
+        version = serializer.validated_data["version"]
+        repo_ver = self.get_repository_version(self.distribution)
+        if not PythonPackageContent.objects.filter(
+            pk__in=repo_ver.content, name_normalized=normalized, version=version
+        ).exists():
+            return HttpResponseNotFound(f"{normalized}=={version} not found in repository")
+
+        result = dispatch(
+            tasks.ayank_package,
+            exclusive_resources=[repo],
+            kwargs={
+                "repository_pk": str(repo.pk),
+                "name": serializer.validated_data["name"],
+                "version": serializer.validated_data["version"],
+                "yanked_reason": serializer.validated_data.get("yanked_reason", ""),
+            },
+        )
+        return OperationPostponedResponse(result, request)
+
+    @extend_schema(
+        request=YankSerializer,
+        responses={202: AsyncOperationResponseSerializer},
+        summary="Unyank a package version",
+    )
+    def unyank(self, request, path):
+        """Unyank a package version, unmarking all its files with data-yanked."""
+        repo = self.distribution.repository
+        if not repo:
+            return HttpResponseBadRequest(reason="Index is not pointing to a repository")
+
+        serializer = YankSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        result = dispatch(
+            tasks.aunyank_package,
+            exclusive_resources=[repo],
+            kwargs={
+                "repository_pk": str(repo.pk),
+                "name": serializer.validated_data["name"],
+                "version": serializer.validated_data["version"],
+            },
+        )
+        return OperationPostponedResponse(result, request)

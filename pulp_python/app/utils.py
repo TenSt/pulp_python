@@ -50,7 +50,6 @@ simple_index_template = """<!DOCTYPE html>
 </html>
 """
 
-# TODO in the future: data-yanked (not implemented yet because it is mutable)
 simple_detail_template = """<!DOCTYPE html>
 <html>
   <head>
@@ -62,6 +61,7 @@ simple_detail_template = """<!DOCTYPE html>
     {%- for pkg in project_packages %}
       <a href="{{ pkg.url }}#sha256={{ pkg.sha256 }}" rel="internal"
       {%- if pkg.requires_python %} data-requires-python="{{ pkg.requires_python }}" {%- endif %}
+      {%- if pkg.yanked %} data-yanked="{{ pkg.yanked_reason }}" {%- endif %}
       {%- if pkg.metadata_sha256 %} data-dist-info-metadata="sha256={{ pkg.metadata_sha256 }}" data-core-metadata="sha256={{ pkg.metadata_sha256 }}"
       {%- endif %} {% if pkg.provenance -%}
       data-provenance="{{ pkg.provenance }}"{% endif %}>{{ pkg.filename }}</a><br/>
@@ -362,7 +362,12 @@ def fetch_json_release_metadata(name: str, version: str, remotes: set[Remote]) -
 
 
 def python_content_to_json(
-    base_path, content_query, version=None, domain=None, repository_version=None
+    base_path,
+    content_query,
+    version=None,
+    domain=None,
+    repository_version=None,
+    yank_markers=None,
 ):
     """
     Converts a QuerySet of PythonPackageContent into the PyPi JSON format
@@ -375,6 +380,8 @@ def python_content_to_json(
 
     Returns None if version is specified but not found within content_query
     """
+    if yank_markers is None:
+        yank_markers = {}
     if repository_version:
         content_query = content_query.annotate(
             active_membership=FilteredRelation(
@@ -386,25 +393,32 @@ def python_content_to_json(
             ),
             repo_added_time=F("active_membership__pulp_created"),
         )
-    full_metadata = {"last_serial": 0}  # For now the serial field isn't supported by Pulp
-    latest_content = latest_content_version(content_query, version)
+
+    all_content = list(content_query)
+    for content in all_content:
+        content.yanked = content.version in yank_markers
+        content.yanked_reason = yank_markers.get(content.version)
+
+    latest_content = latest_content_version(all_content, version)
     if not latest_content:
         return None
-    full_metadata.update({"info": python_content_to_info(latest_content[0])})
-    full_metadata.update({"releases": python_content_to_releases(content_query, base_path, domain)})
-    full_metadata.update({"urls": python_content_to_urls(latest_content, base_path, domain)})
+
+    full_metadata = {"last_serial": 0}  # For now the serial field isn't supported by Pulp
+    full_metadata["info"] = python_content_to_info(latest_content[0])
+    full_metadata["releases"] = python_content_to_releases(all_content, base_path, domain)
+    full_metadata["urls"] = python_content_to_urls(latest_content, base_path, domain)
     return full_metadata
 
 
-def latest_content_version(content_query, version):
+def latest_content_version(all_content, version):
     """
-    Walks through the content QuerySet and finds the instances that is the latest version.
+    Walks through the content list and finds the instances that are the latest version.
     If 'version' is specified, the function instead tries to find content instances
     with that version and will return an empty list if nothing is found
     """
     latest_version = version
     latest_content = []
-    for content in content_query:
+    for content in all_content:
         if version and parse(version) == parse(content.version):
             latest_content.append(content)
         elif not latest_version or parse(content.version) > parse(latest_version):
@@ -462,8 +476,8 @@ def python_content_to_info(content):
         "platform": content.platform or "",
         "requires_dist": json_to_dict(content.requires_dist) or None,
         "classifiers": json_to_dict(content.classifiers) or None,
-        "yanked": False,  # These are no longer used on PyPI, but are still present
-        "yanked_reason": None,
+        "yanked": getattr(content, "yanked", False),
+        "yanked_reason": getattr(content, "yanked_reason", None),
         # New core metadata (Version 2.1, 2.2, 2.4)
         "provides_extras": json_to_dict(content.provides_extras) or None,
         "dynamic": json_to_dict(content.dynamic) or None,
@@ -472,13 +486,13 @@ def python_content_to_info(content):
     }
 
 
-def python_content_to_releases(content_query, base_path, domain=None):
+def python_content_to_releases(all_content, base_path, domain=None):
     """
-    Takes a QuerySet of PythonPackageContent and returns a dictionary of releases
+    Takes a list of PythonPackageContent and returns a dictionary of releases
     with each key being a version and value being a list of content for that version of the package
     """
     releases = defaultdict(lambda: [])
-    for content in content_query:
+    for content in all_content:
         releases[content.version].append(
             python_content_to_download_info(content, base_path, domain)
         )
@@ -535,8 +549,8 @@ def python_content_to_download_info(content, base_path, domain=None):
             (getattr(content, "repo_added_time", None) or content.pulp_created).isoformat()
         ),
         "url": url,
-        "yanked": False,
-        "yanked_reason": None,
+        "yanked": getattr(content, "yanked", False),
+        "yanked_reason": getattr(content, "yanked_reason", None),
     }
 
 
@@ -591,7 +605,12 @@ def write_simple_detail_json(project_name, project_packages):
                 "core-metadata": (
                     {"sha256": package["metadata_sha256"]} if package["metadata_sha256"] else False
                 ),
-                # yanked and yanked_reason are not implemented because they are mutable
+                # PEP 592
+                "yanked": (
+                    package["yanked_reason"]
+                    if package["yanked"] and package["yanked_reason"]
+                    else package["yanked"]
+                ),
                 # (v1.1, PEP 700)
                 "size": package["size"],
                 "upload-time": format_upload_time(package["upload_time"]),

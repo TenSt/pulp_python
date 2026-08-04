@@ -204,8 +204,6 @@ class PythonPackageContent(Content):
     sha256 = models.CharField(db_index=True, max_length=64)
     metadata_sha256 = models.CharField(max_length=64, null=True)
     size = models.BigIntegerField(default=0)
-    # yanked and yanked_reason are not implemented because they are mutable
-
     # From pulpcore
     PROTECTED_FROM_RECLAIM = False
     TYPE = "python"
@@ -289,6 +287,32 @@ class PackageProvenance(Content):
         unique_together = ("sha256", "_pulp_domain")
 
 
+class PackageYank(Content):
+    """
+    A marker content type indicating a package version is yanked in a repository (PEP 592).
+
+    Its presence in a repository version means all files for the matching
+    (name_normalized, version) pair are yanked. Yank/unyank operations
+    add/remove this marker, creating new repository versions.
+    """
+
+    TYPE = "python_yank"
+    repo_key_fields = ("name_normalized", "version")
+
+    name_normalized = models.TextField()
+    version = models.TextField()
+    yanked_reason = models.TextField(default="")
+
+    _pulp_domain = models.ForeignKey("core.Domain", default=get_domain_pk, on_delete=models.PROTECT)
+
+    def __str__(self):
+        return f"<{self._meta.object_name}: {self.name_normalized} [{self.version}]>"
+
+    class Meta:
+        default_related_name = "%(app_label)s_%(model_name)s"
+        unique_together = ("name_normalized", "version", "yanked_reason", "_pulp_domain")
+
+
 class PythonPublication(Publication, AutoAddObjPermsMixin):
     """
     A Publication for PythonContent.
@@ -364,7 +388,7 @@ class PythonRepository(Repository, AutoAddObjPermsMixin):
     """
 
     TYPE = "python"
-    CONTENT_TYPES = [PythonPackageContent, PackageProvenance]
+    CONTENT_TYPES = [PythonPackageContent, PackageProvenance, PackageYank]
     REMOTE_TYPES = [PythonRemote]
     PULL_THROUGH_SUPPORTED = True
 

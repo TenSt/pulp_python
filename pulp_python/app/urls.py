@@ -7,6 +7,7 @@ from pulp_python.app.pypi.views import (
     PyPIView,
     SimpleView,
     UploadView,
+    YankView,
 )
 
 if settings.DOMAIN_ENABLED:
@@ -40,5 +41,7 @@ urlpatterns = [
         SimpleView.as_view({"get": "list", "post": "create"}),
         name="simple-detail",
     ),
+    path(PYPI_API_URL + "yank/", YankView.as_view({"post": "yank"}), name="yank"),
+    path(PYPI_API_URL + "unyank/", YankView.as_view({"post": "unyank"}), name="unyank"),
     path(PYPI_API_URL, PyPIView.as_view({"get": "retrieve"}), name="pypi-detail"),
 ]

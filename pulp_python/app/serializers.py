@@ -683,6 +683,25 @@ class PackageProvenanceSerializer(core_serializers.NoArtifactContentUploadSerial
         model = python_models.PackageProvenance
 
 
+class PackageYankSerializer(core_serializers.NoArtifactContentSerializer):
+    """
+    Read-only serializer for PackageYank content units (PEP 592).
+    Used by PackageYankViewSet to expose yank markers via the Pulp REST API.
+    """
+
+    name_normalized = serializers.CharField(read_only=True)
+    version = serializers.CharField(read_only=True)
+    yanked_reason = serializers.CharField(read_only=True)
+
+    class Meta:
+        fields = core_serializers.NoArtifactContentSerializer.Meta.fields + (
+            "name_normalized",
+            "version",
+            "yanked_reason",
+        )
+        model = python_models.PackageYank
+
+
 class MultipleChoiceArrayField(serializers.MultipleChoiceField):
     """
     A wrapper to make sure this DRF serializer works properly with ArrayFields.

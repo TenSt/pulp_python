@@ -24,6 +24,7 @@ from pulpcore.plugin.stages import (
 from pulp_python.app.exceptions import UnsupportedProtocolError
 from pulp_python.app.models import (
     PackageProvenance,
+    PackageYank,
     PythonPackageContent,
     PythonRemote,
 )
@@ -264,6 +265,15 @@ class PulpMirror(Mirror):
                             deferred_download=self.deferred_download,
                         )
                         d_artifacts.append(metadata_artifact)
+
+                    if upstream_pkg.is_yanked:
+                        yank_marker = PackageYank(
+                            name_normalized=pkg.name,
+                            version=version,
+                            yanked_reason=upstream_pkg.yanked_reason or "",
+                        )
+                        yank_dc = DeclarativeContent(content=yank_marker, d_artifacts=[])
+                        await self.python_stage.put(yank_dc)
 
                 dc = DeclarativeContent(content=package, d_artifacts=d_artifacts)
                 declared_contents[entry["filename"]] = dc

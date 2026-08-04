@@ -94,6 +94,62 @@ pulp python repository blocklist list --repository "foo"
 
 Once an entry is removed, packages matching it can be added to the repository again.
 
+## Package Yanking
+
+[PEP 592](https://peps.python.org/pep-0592/) allows marking package versions as "yanked".
+Package installers like `pip` will skip yanked versions when resolving dependencies.
+However, if a user requests an exact version (e.g. `pip install twine==5.1.0`),
+the yanked package will still be installed, with a warning.
+
+Yank status is per-repository: yanking a package in one repository does not affect other repositories
+that contain the same package.
+
+### Yank a package version
+
+To yank a package version, send a POST request to the distribution's `/yank/` endpoint:
+
+```bash
+http POST http://localhost:5001/pypi/default/<distribution-base-path>/yank/ \
+    name=shelf-reader version=0.1 yanked_reason="critical security bug" \
+    -a admin:password
+```
+
+The `yanked_reason` field is optional. If omitted, the package is marked as yanked with no reason.
+
+Yanking creates a new repository version with the yank marker added.
+Yanking a version that is already yanked with the same reason is a no-op (no new repository version is created).
+Re-yanking with a different reason will update the reason and create a new repository version.
+
+### Unyank a package version
+
+```bash
+http POST http://localhost:5001/pypi/default/<distribution-base-path>/unyank/ \
+    name=shelf-reader version=0.1 \
+    -a admin:password
+```
+
+Unyanking creates a new repository version with the yank marker removed.
+Unyanking a version that is not yanked is a no-op.
+
+### Syncing yanked packages
+
+When syncing from a remote that has yanked packages (e.g. PyPI), the yank status is preserved automatically.
+Pulp creates a yank marker for each yanked version and includes it in the repository version.
+
+### Viewing yank status
+
+Yank status is visible in the Simple API and the PyPI Metadata API.
+
+Yank markers can also be listed via the REST API:
+
+```bash
+# List all yank markers
+http GET http://localhost:5001/pulp/default/api/v3/content/python/yanks/ -a admin:password
+
+# List yank markers for a specific repository version
+http GET http://localhost:5001/pulp/default/api/v3/content/python/yanks/?repository_version=<repo-version-href> -a admin:password
+```
+
 ## Package Substitution
 
 By default, Python repositories allow package substitution: uploading, syncing, or adding a package
