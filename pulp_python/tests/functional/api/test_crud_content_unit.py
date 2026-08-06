@@ -1,6 +1,7 @@
 from urllib.parse import urljoin
 
 import pytest
+import requests
 from pypi_simple import PyPISimple
 
 from pulpcore.tests.functional.utils import PulpTaskError
@@ -180,6 +181,24 @@ def test_upload_metadata_24_spec(python_content_factory):
     assert content.metadata_version == "2.4"
     assert content.license_expression == "MIT"
     assert content.license_file == '["LICENSE"]'
+
+
+@pytest.mark.parallel
+def test_legacy_upload_metadata_25(python_empty_repo_distro, python_package_dist_directory):
+    """Test that metadata_version 2.5 (PEP 794) is accepted via the legacy upload endpoint."""
+    flit_url = get_package_url("flit", "flit-4.0.2-py3-none-any.whl")
+    _, flit_file = python_package_dist_directory(flit_url)
+    _, distro = python_empty_repo_distro()
+    url = urljoin(distro.base_url, "legacy/")
+    sha256 = "7b0b0038cd91a7f04e2e287d958dc5f25e68ffeed0b93e613bd50aec99a0d9ca"
+    with open(flit_file, "rb") as f:
+        response = requests.post(
+            url,
+            data={"sha256_digest": sha256, "metadata_version": "2.5"},
+            files={"content": f},
+            auth=("admin", "password"),
+        )
+    assert response.status_code == 202
 
 
 @pytest.mark.parallel
