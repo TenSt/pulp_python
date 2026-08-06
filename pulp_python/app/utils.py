@@ -607,9 +607,9 @@ def write_simple_detail_json(project_name, project_packages):
                 ),
                 # PEP 592
                 "yanked": (
-                    package["yanked_reason"]
-                    if package["yanked"] and package["yanked_reason"]
-                    else package["yanked"]
+                    package.get("yanked_reason")
+                    if package.get("yanked") and package.get("yanked_reason")
+                    else package.get("yanked", False)
                 ),
                 # (v1.1, PEP 700)
                 "size": package["size"],
