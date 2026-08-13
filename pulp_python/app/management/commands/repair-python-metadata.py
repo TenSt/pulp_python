@@ -59,7 +59,7 @@ def href_prn_list_handler(value):
     """Common list parsing for a string of hrefs/prns."""
     r = re.compile(
         rf"""
-        (?:{settings.API_ROOT}(?:[-_a-zA-Z0-9]+/)?api/v3/repositories/python/python/[-a-f0-9]+/)
+        (?:{settings.API_ROOT}(?:[-_a-zA-Z0-9]+/)?api/v\d+/repositories/python/python/[-a-f0-9]+/)
         |(?:prn:python\.pythonrepository:[-a-f0-9]+)
         """,
         re.VERBOSE,

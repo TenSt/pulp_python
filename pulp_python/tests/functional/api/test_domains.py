@@ -29,7 +29,7 @@ def test_domain_object_creation(
     domain_name = domain.name
 
     repo = python_repo_factory(pulp_domain=domain_name)
-    assert f"{domain_name}/api/v3/" in repo.pulp_href
+    assert f"{domain_name}/api/" in repo.pulp_href
 
     repos = python_bindings.RepositoriesPythonApi.list(pulp_domain=domain_name)
     assert repos.count == 1

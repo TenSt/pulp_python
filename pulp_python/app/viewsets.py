@@ -144,7 +144,7 @@ class PythonRepositoryViewSet(
         responses={202: AsyncOperationResponseSerializer},
     )
     @action(detail=True, methods=["post"], serializer_class=RepositoryAddRemoveContentSerializer)
-    def modify(self, request, pk):
+    def modify(self, request, pk, **kwargs):
         """
         Queues a task that creates a new RepositoryVersion by adding and removing content units.
 
@@ -196,7 +196,7 @@ class PythonRepositoryViewSet(
         responses={202: AsyncOperationResponseSerializer},
     )
     @action(detail=True, methods=["post"], serializer_class=None)
-    def repair_metadata(self, request, pk):
+    def repair_metadata(self, request, pk, **kwargs):
         """
         Trigger an asynchronous task to repair Python metadata. This task will repair metadata
         of all packages for the specified `Repository`, without creating a new `RepositoryVersion`.
@@ -212,7 +212,7 @@ class PythonRepositoryViewSet(
 
     @extend_schema(summary="Sync from remote", responses={202: AsyncOperationResponseSerializer})
     @action(detail=True, methods=["post"], serializer_class=RepositorySyncURLSerializer)
-    def sync(self, request, pk):
+    def sync(self, request, pk, **kwargs):
         """
         <!-- User-facing documentation, rendered as html-->
         Trigger an asynchronous task to sync python content. The sync task will retrieve Python
@@ -576,7 +576,7 @@ class PythonPackageSingleArtifactContentUploadViewSet(
         methods=["post"],
         serializer_class=python_serializers.PythonPackageContentUploadSerializer,
     )
-    def upload(self, request):
+    def upload(self, request, **kwargs):
         """
         Create a Python package.
         """
@@ -748,7 +748,7 @@ class PythonRemoteViewSet(core_viewsets.RemoteViewSet, core_viewsets.RolesMixin)
         methods=["post"],
         serializer_class=python_serializers.PythonBanderRemoteSerializer,
     )
-    def from_bandersnatch(self, request):
+    def from_bandersnatch(self, request, **kwargs):
         """
         <!-- User-facing documentation, rendered as html-->
         Takes the fields specified in the Bandersnatch config and creates a Python Remote from it.
@@ -875,7 +875,7 @@ class PythonPublicationViewSet(core_viewsets.PublicationViewSet, core_viewsets.R
     }
 
     @extend_schema(responses={202: AsyncOperationResponseSerializer}, deprecated=True)
-    def create(self, request):
+    def create(self, request, **kwargs):
         """
         <!-- User-facing documentation, rendered as html-->
         Dispatches a publish task, which generates metadata that will be used by pip.
