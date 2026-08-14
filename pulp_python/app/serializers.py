@@ -73,6 +73,17 @@ class PythonRepositorySerializer(core_serializers.RepositorySerializer):
         default=True,
         required=False,
     )
+    error_on_reject = serializers.BooleanField(
+        help_text=_(
+            "Whether to fail the entire repository version when packages are rejected by the "
+            "package substitution or blocklist policies. When True (the default), a ValidationError "
+            "is raised and no packages from the request are added. When False, rejected packages "
+            "are skipped and remaining packages are added; skipped packages are recorded in a "
+            "task progress report."
+        ),
+        default=True,
+        required=False,
+    )
 
     def get_blocklist_entries_href(self, obj):
         repo_href = reverse("repositories-python/python-detail", kwargs={"pk": obj.pk})
@@ -82,6 +93,7 @@ class PythonRepositorySerializer(core_serializers.RepositorySerializer):
         fields = core_serializers.RepositorySerializer.Meta.fields + (
             "autopublish",
             "allow_package_substitution",
+            "error_on_reject",
             "blocklist_entries_href",
         )
         model = python_models.PythonRepository

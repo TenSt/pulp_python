@@ -19,6 +19,7 @@ from pulpcore.plugin.models import (
     BaseModel,
     Content,
     Distribution,
+    ProgressReport,
     Publication,
     Remote,
     Repository,
@@ -394,6 +395,7 @@ class PythonRepository(Repository, AutoAddObjPermsMixin):
 
     autopublish = models.BooleanField(default=False)
     allow_package_substitution = models.BooleanField(default=True)
+    error_on_reject = models.BooleanField(default=True)
 
     class Meta:
         default_related_name = "%(app_label)s_%(model_name)s"
@@ -423,10 +425,9 @@ class PythonRepository(Repository, AutoAddObjPermsMixin):
         """
         Remove duplicate packages that have the same filename.
 
-        When allow_package_substitution is False, reject any new version that would implicitly
-        replace existing content with different checksums (content substitution).
-
-        Also checks newly added content against the repository's blocklist entries.
+        Enforces package substitution and blocklist policies on newly added content.
+        When error_on_reject is True (default), a ValidationError is raised and the version
+        fails. When False, rejected packages are skipped and recorded in a progress report.
         """
         if not self.allow_package_substitution:
             self._check_for_package_substitution(new_version)
@@ -436,52 +437,111 @@ class PythonRepository(Repository, AutoAddObjPermsMixin):
 
     def _check_for_package_substitution(self, new_version):
         """
-        Raise a ValidationError if newly added packages would replace existing packages
-        that have the same filename but a different sha256 checksum.
+        Handle packages that would replace existing packages with the same filename but a
+        different sha256 checksum.
+
+        When error_on_reject is True, raise a ValidationError. When False, remove the
+        newly added conflicting packages from the version and record them in a progress report.
         """
         qs = PythonPackageContent.objects.filter(pk__in=new_version.content)
         duplicates = collect_duplicates(qs, ("filename",))
-        if duplicates:
+        if not duplicates:
+            return
+
+        if self.error_on_reject:
             raise ValidationError(
                 "Found duplicate packages being added with the same filename but different "
                 "checksums. To allow this, set 'allow_package_substitution' to True on the "
                 f"repository. Conflicting packages: {duplicates}"
             )
 
+        added_content = PythonPackageContent.objects.filter(
+            pk__in=new_version.added(base_version=new_version.base_version)
+        )
+        added_pks = {str(pkg.pk): pkg.filename for pkg in added_content.only("pk", "filename")}
+        to_remove_pks = []
+        messages = []
+        # Skip every newly added package in a conflicting filename group, including when
+        # multiple new packages share a filename and none of them remain in the version.
+        for dup in duplicates:
+            for pk in dup.duplicate_pks:
+                if pk in added_pks:
+                    to_remove_pks.append(pk)
+                    messages.append(f"{added_pks[pk]} ({pk})")
+
+        if to_remove_pks:
+            new_version.remove_content(PythonPackageContent.objects.filter(pk__in=to_remove_pks))
+            self._report_rejected_packages(
+                messages,
+                message="Skipping packages rejected by package substitution policy",
+                code="python.reject.substitution",
+            )
+
     def _check_blocklist(self, new_version):
         """
         Check newly added content in a repository version against the blocklist.
+
+        When error_on_reject is True, raise a ValidationError. When False, remove the
+        blocklisted packages from the version and record them in a progress report.
         """
         added_content = PythonPackageContent.objects.filter(
-            pk__in=new_version.added().values_list("pk", flat=True)
-        ).only("filename", "name_normalized", "version")
-        if added_content.exists():
-            self.check_blocklist_for_packages(added_content)
-
-    def check_blocklist_for_packages(self, packages):
-        """
-        Raise a ValidationError if any of the given packages match a blocklist entry.
-        """
-        entries = PythonBlocklistEntry.objects.filter(repository=self)
-        if not entries.exists():
+            pk__in=new_version.added(base_version=new_version.base_version)
+        ).only("pk", "filename", "name_normalized", "version")
+        if not added_content.exists():
             return
+
+        blocked = self.find_blocklisted_packages(added_content)
+        if not blocked:
+            return
+
+        if self.error_on_reject:
+            raise ValidationError(
+                "Blocklisted packages cannot be added to this repository: {}".format(
+                    ", ".join(pkg.filename for pkg in blocked)
+                )
+            )
+
+        new_version.remove_content(
+            PythonPackageContent.objects.filter(pk__in=[p.pk for p in blocked])
+        )
+        self._report_rejected_packages(
+            [f"{pkg.filename} ({pkg.pk})" for pkg in blocked],
+            message="Skipping packages rejected by blocklist policy",
+            code="python.reject.blocklist",
+        )
+
+    def find_blocklisted_packages(self, packages):
+        """
+        Return the packages from `packages` that match a blocklist entry.
+        """
+        entries = list(PythonBlocklistEntry.objects.filter(repository=self))
+        if not entries:
+            return []
 
         blocked = []
         for pkg in packages:
             for entry in entries:
                 if entry.filename and entry.filename == pkg.filename:
-                    blocked.append(pkg.filename)
+                    blocked.append(pkg)
                     break
                 if entry.name == pkg.name_normalized:
                     if not entry.version or entry.version == pkg.version:
-                        blocked.append(pkg.filename)
+                        blocked.append(pkg)
                         break
-        if blocked:
-            raise ValidationError(
-                "Blocklisted packages cannot be added to this repository: {}".format(
-                    ", ".join(blocked)
-                )
-            )
+        return blocked
+
+    def _report_rejected_packages(self, details, message, code):
+        """
+        Record skipped packages in a task progress report.
+        """
+        log.info("%s (%s package(s))", message, len(details))
+        with ProgressReport(
+            message=message,
+            code=code,
+            total=len(details),
+            suffix="; ".join(details),
+        ) as pb:
+            pb.increase_by(len(details))
 
 
 class PythonBlocklistEntry(BaseModel):

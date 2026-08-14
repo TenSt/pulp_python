@@ -2,7 +2,12 @@ import pytest
 
 from pulpcore.tests.functional.utils import PulpTaskError
 
-from pulp_python.tests.functional.constants import PYTHON_EGG_FILENAME, PYTHON_EGG_URL
+from pulp_python.tests.functional.constants import (
+    PYTHON_EGG_FILENAME,
+    PYTHON_EGG_URL,
+    PYTHON_WHEEL_FILENAME,
+    PYTHON_WHEEL_URL,
+)
 
 CONTENT_BODY = {"relative_path": PYTHON_EGG_FILENAME, "file_url": PYTHON_EGG_URL}
 BLOCKED_MSG = "Blocklisted packages cannot be added to this repository"
@@ -150,3 +155,48 @@ def test_modify_blocked(monitor_task, python_bindings, python_repo):
 
     repo = python_bindings.RepositoriesPythonApi.read(python_repo.pulp_href)
     assert repo.latest_version_href.endswith("/0/")
+
+
+@pytest.mark.parallel
+def test_error_on_reject_false_skips_blocklisted(
+    monitor_task, python_bindings, python_repo_factory
+):
+    """
+    When error_on_reject=False, blocklisted packages in a batch modify are skipped while
+    non-blocklisted packages are still added.
+    """
+    repo = python_repo_factory(error_on_reject=False)
+    python_bindings.RepositoriesPythonBlocklistEntriesApi.create(
+        repo.pulp_href,
+        python_bindings.PythonPythonBlocklistEntry(filename=PYTHON_EGG_FILENAME),
+    )
+
+    response = python_bindings.ContentPackagesApi.create(**CONTENT_BODY)
+    blocked = python_bindings.ContentPackagesApi.read(
+        monitor_task(response.task).created_resources[0]
+    )
+    response = python_bindings.ContentPackagesApi.create(
+        relative_path=PYTHON_WHEEL_FILENAME, file_url=PYTHON_WHEEL_URL
+    )
+    allowed = python_bindings.ContentPackagesApi.read(
+        monitor_task(response.task).created_resources[0]
+    )
+
+    body = {"add_content_units": [blocked.pulp_href, allowed.pulp_href]}
+    task = monitor_task(python_bindings.RepositoriesPythonApi.modify(repo.pulp_href, body).task)
+
+    reports = {report.code: report for report in task.progress_reports}
+    assert "python.reject.blocklist" in reports
+    report = reports["python.reject.blocklist"]
+    assert report.done == 1
+    assert PYTHON_EGG_FILENAME in report.suffix
+    assert blocked.prn.split(":")[-1] in report.suffix
+
+    repo = python_bindings.RepositoriesPythonApi.read(repo.pulp_href)
+    content_list = python_bindings.ContentPackagesApi.list(
+        repository_version=repo.latest_version_href
+    )
+    hrefs = {c.pulp_href for c in content_list.results}
+    assert allowed.pulp_href in hrefs
+    assert blocked.pulp_href not in hrefs
+    assert content_list.count == 1
