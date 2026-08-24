@@ -103,6 +103,22 @@ pip install --trusted-host localhost shelf-reader
 
 See the [pip docs](https://pip.pypa.io/en/stable/topics/configuration) for more details.
 
+## JSON from the content app
+
+When pulpcore's content app is asked for JSON (`Accept: application/json`), Python distributions
+serve the same PyPI JSON and PEP 691 Simple JSON already available from the `/pypi/` API. Clients
+do not need the `/json` URL suffix or the PyPI Simple media types:
+
+```bash
+http "${CONTENT_ORIGIN}${CONTENT_PATH_PREFIX}foo/simple/" Accept:application/json
+http "${CONTENT_ORIGIN}${CONTENT_PATH_PREFIX}foo/simple/shelf-reader/" Accept:application/json
+http "${CONTENT_ORIGIN}${CONTENT_PATH_PREFIX}foo/pypi/shelf-reader/" Accept:application/json
+```
+
+The distribution root still returns pulpcore's generic file listing. Package artifacts remain binary
+regardless of `Accept`. This requires a pulpcore that includes `Distribution.content_handler_json`
+(pulpcore issue 7887).
+
 
 ## Migrating off Publications
 

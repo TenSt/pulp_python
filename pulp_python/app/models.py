@@ -8,6 +8,7 @@ from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
+from django.db.models import F, FilteredRelation, Q
 from django_lifecycle import (
     BEFORE_SAVE,
     hook,
@@ -36,10 +37,14 @@ from .provenance import Provenance
 from .utils import (
     PYPI_LAST_SERIAL,
     PYPI_SERIAL_CONSTANT,
+    PYPI_SIMPLE_V1_JSON,
     artifact_to_metadata_artifact,
     artifact_to_python_content_data,
+    build_content_url,
     canonicalize_name,
     python_content_to_json,
+    write_simple_detail_json,
+    write_simple_index_json,
 )
 
 log = getLogger(__name__)
@@ -126,7 +131,7 @@ class PythonDistribution(Distribution, AutoAddObjPermsMixin):
                 pk__in=self.publication.repository_version.content, name_normalized=normalized
             )
             # TODO Change this value to the Repo's serial value when implemented
-            headers = {PYPI_LAST_SERIAL: str(PYPI_SERIAL_CONSTANT)}
+            headers = {PYPI_LAST_SERIAL: str(PYPI_SERIAL_CONSTANT), "Vary": "Accept"}
             if not settings.DOMAIN_ENABLED:
                 domain = None
             json_body = python_content_to_json(
@@ -134,6 +139,111 @@ class PythonDistribution(Distribution, AutoAddObjPermsMixin):
             )
             if json_body:
                 return json_response(json_body, headers=headers)
+
+        return None
+
+    def content_handler_json(self, path):
+        """
+        Handler to serve a JSON representation of the content at ``path`` for this Distribution.
+
+        Called by pulpcore's content app when a client's ``Accept`` header prefers JSON,
+        instead of pulpcore's generic recursive file listing. This reuses the same
+        serialization already used by the ``pypi/*/json`` and ``pypi/simple`` PyPI APIs, so
+        requests made directly against the content app (e.g. by a UI or ``pip``-compatible
+        tool) get the same structured data without needing to know those separate URL
+        conventions.
+
+        Args:
+            path (str): The path being requested
+        Returns:
+            None if there is no JSON representation to serve at path. Otherwise a
+            JSON-serializable dict, or an aiohttp.web.Response for full header control.
+        """
+        path = PurePath(path)
+        parts = path.parts
+        if not parts:
+            # Distro root: let pulpcore's generic recursive listing handle it.
+            return None
+
+        _, repo_version, _ = self.get_repository_publication_and_version()
+        if repo_version is None:
+            return None
+        content = PythonPackageContent.objects.filter(pk__in=repo_version.content)
+        domain = get_domain() if settings.DOMAIN_ENABLED else None
+
+        if parts[0] == "pypi" and 2 <= len(parts) <= 3 and parts[-1] != "json":
+            # e.g. pypi/<name>/ or pypi/<name>/<version>/ (the *-suffixed /json paths are
+            # already handled by content_handler, unconditionally on Accept).
+            name = parts[1]
+            version = parts[2] if len(parts) == 3 else None
+            normalized = canonicalize_name(name)
+            package_content = content.filter(name_normalized=normalized)
+            headers = {PYPI_LAST_SERIAL: str(PYPI_SERIAL_CONSTANT), "Vary": "Accept"}
+            yank_markers = dict(
+                PackageYank.objects.filter(
+                    pk__in=repo_version.content, name_normalized=normalized
+                ).values_list("version", "yanked_reason")
+            )
+            json_body = python_content_to_json(
+                self.base_path,
+                package_content,
+                version=version,
+                domain=domain,
+                repository_version=repo_version,
+                yank_markers=yank_markers,
+            )
+            if json_body:
+                return json_response(json_body, headers=headers)
+            return None
+
+        if parts[0] == "simple":
+            if len(parts) == 1:
+                names = (
+                    content.order_by("name_normalized")
+                    .values_list("name", flat=True)
+                    .distinct("name_normalized")
+                )
+                headers = {PYPI_LAST_SERIAL: str(PYPI_SERIAL_CONSTANT), "Vary": "Accept"}
+                return json_response(
+                    write_simple_index_json(list(names)),
+                    headers=headers,
+                    content_type=PYPI_SIMPLE_V1_JSON,
+                )
+
+            if len(parts) != 2:
+                return None
+
+            normalized = canonicalize_name(parts[1])
+            packages = content.filter(name_normalized=normalized).annotate(
+                active_membership=FilteredRelation(
+                    "version_memberships",
+                    condition=Q(
+                        version_memberships__repository=repo_version.repository,
+                        version_memberships__version_removed=None,
+                    ),
+                ),
+                repo_added_time=F("active_membership__pulp_created"),
+            )
+            if not packages.exists():
+                return None
+            releases = [
+                {
+                    "filename": p.filename,
+                    "sha256": p.sha256,
+                    "metadata_sha256": p.metadata_sha256,
+                    "requires_python": p.requires_python,
+                    "size": p.size,
+                    "upload_time": p.repo_added_time or p.pulp_created,
+                    "version": p.version,
+                    "url": build_content_url(self.base_path, p.filename, domain=domain),
+                }
+                for p in packages
+            ]
+            return json_response(
+                write_simple_detail_json(normalized, releases),
+                headers={PYPI_LAST_SERIAL: str(PYPI_SERIAL_CONSTANT), "Vary": "Accept"},
+                content_type=PYPI_SIMPLE_V1_JSON,
+            )
 
         return None
 

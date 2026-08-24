@@ -1,0 +1,1 @@
+Added `PythonDistribution.content_handler_json` so the content app can serve PyPI JSON and PEP 691 Simple JSON when the client prefers `application/json`. Requires a pulpcore that includes `Distribution.content_handler_json` (issue 7887).

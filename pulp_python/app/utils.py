@@ -506,6 +506,20 @@ def python_content_to_urls(contents, base_path, domain=None):
     return [python_content_to_download_info(content, base_path, domain) for content in contents]
 
 
+def build_content_url(base_path, filename, domain=None):
+    """
+    Builds the absolute content-app URL for a filename served under a distribution's base_path.
+    """
+    origin = settings.CONTENT_ORIGIN or settings.PYPI_API_HOSTNAME or ""
+    origin = origin.strip("/")
+    prefix = settings.CONTENT_PATH_PREFIX.strip("/")
+    base_path = base_path.strip("/")
+    components = [origin, prefix, base_path, filename]
+    if domain:
+        components.insert(2, domain.name)
+    return "/".join(components)
+
+
 def python_content_to_download_info(content, base_path, domain=None):
     """
     Takes in a PythonPackageContent and base path of the distribution to create a dictionary of
@@ -524,14 +538,7 @@ def python_content_to_download_info(content, base_path, domain=None):
         relative_path__endswith=".metadata"
     ).first()
     artifact = find_artifact()
-    origin = settings.CONTENT_ORIGIN or settings.PYPI_API_HOSTNAME or ""
-    origin = origin.strip("/")
-    prefix = settings.CONTENT_PATH_PREFIX.strip("/")
-    base_path = base_path.strip("/")
-    components = [origin, prefix, base_path, content.filename]
-    if domain:
-        components.insert(2, domain.name)
-    url = "/".join(components)
+    url = build_content_url(base_path, content.filename, domain=domain)
     md5 = artifact.md5 if artifact and artifact.md5 else ""
     return {
         "comment_text": "",
