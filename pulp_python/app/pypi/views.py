@@ -72,15 +72,30 @@ PYPI_SIMPLE_V1_HTML = "application/vnd.pypi.simple.v1+html"
 PYPI_SIMPLE_V1_JSON = "application/vnd.pypi.simple.v1+json"
 
 
-def _etag_func(request, path, **kwargs):
-    """Compute unquoted ETag for the condition decorator. Returns None if no repo."""
+def _get_repo_version(path):
+    """Resolve path to a RepositoryVersion, or None if not found."""
     try:
         distro = PyPIMixin.get_distribution(path)
-        repo_ver = PyPIMixin.get_repository_version(distro)
+        return PyPIMixin.get_repository_version(distro)
     except Http404:
+        return None
+
+
+def _etag_func(request, path, **kwargs):
+    """Compute unquoted ETag for the condition decorator. Returns None if no repo."""
+    repo_ver = _get_repo_version(path)
+    if repo_ver is None:
         return None
     raw = f"{repo_ver.number}:{repo_ver.pulp_created.isoformat()}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _last_modified_func(request, path, **kwargs):
+    """Return the repository version creation timestamp for Last-Modified."""
+    repo_ver = _get_repo_version(path)
+    if repo_ver is None:
+        return None
+    return repo_ver.pulp_created
 
 
 class PyPISimpleHTMLRenderer(TemplateHTMLRenderer):
@@ -317,7 +332,7 @@ class SimpleView(PackageUploadMixin, ViewSet):
 
     @extend_schema(summary="Get index simple page")
     @method_decorator(cache_control(max_age=600, public=True))
-    @method_decorator(condition(etag_func=_etag_func))
+    @method_decorator(condition(etag_func=_etag_func, last_modified_func=_last_modified_func))
     @PythonApiCache(base_key=find_base_path_cached)
     def list(self, request, path):
         """Gets the simple api html page for the index."""
@@ -379,7 +394,7 @@ class SimpleView(PackageUploadMixin, ViewSet):
 
     @extend_schema(operation_id="pypi_simple_package_read", summary="Get package simple page")
     @method_decorator(cache_control(max_age=600, public=True))
-    @method_decorator(condition(etag_func=_etag_func))
+    @method_decorator(condition(etag_func=_etag_func, last_modified_func=_last_modified_func))
     @PythonApiCache(base_key=find_base_path_cached)
     def retrieve(self, request, path, package):
         """Retrieves the simple api html/json page for a package."""
@@ -482,6 +497,8 @@ class MetadataView(PyPIMixin, ViewSet):
         responses={200: PackageMetadataSerializer},
         summary="Get package metadata",
     )
+    @method_decorator(cache_control(max_age=900, public=True))
+    @method_decorator(condition(etag_func=_etag_func, last_modified_func=_last_modified_func))
     def retrieve(self, request, path, meta):
         """
         Retrieves the package's core-metadata specified by
