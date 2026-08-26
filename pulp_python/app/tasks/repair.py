@@ -50,18 +50,29 @@ def repair(repository_pk: UUID) -> None:
     num_repaired, pkgs_not_repaired, num_metadata_repaired, pkgs_metadata_not_repaired = (
         repair_metadata(content)
     )
-    # Convert set() to 0
-    if not pkgs_not_repaired:
-        pkgs_not_repaired = 0
-    if not pkgs_metadata_not_repaired:
-        pkgs_metadata_not_repaired = 0
+
+    def _format_pkg_set(pk_set):
+        """Resolve a set of package PKs to 'name-version (pk)' strings."""
+        if not pk_set:
+            return "none"
+        packages = PythonPackageContent.objects.filter(pk__in=pk_set).values_list(
+            "name", "version", "pk"
+        )
+        return ", ".join(f"{name}-{version} ({pk})" for name, version, pk in packages)
 
     log.info(
         _(
-            "{} packages' metadata repaired. Not repaired packages due to either "
-            "inaccessible URL or mismatched sha256: {}. "
-            "{} metadata files repaired. Packages whose metadata files could not be repaired: {}."
-        ).format(num_repaired, pkgs_not_repaired, num_metadata_repaired, pkgs_metadata_not_repaired)
+            "Repository: %s. "
+            "%d packages' metadata repaired. "
+            "Not repaired packages due to either inaccessible URL or mismatched sha256: [%s]. "
+            "%d metadata files repaired. "
+            "Packages whose metadata files could not be repaired: [%s]."
+        ),
+        repository.name,
+        num_repaired,
+        _format_pkg_set(pkgs_not_repaired),
+        num_metadata_repaired,
+        _format_pkg_set(pkgs_metadata_not_repaired),
     )
 
 
